@@ -180,9 +180,6 @@ def render_login_page():
                     st.success(f"✅ Welcome back, {result['full_name'] or result['username']}!")
                     st.rerun()
 
-        with st.expander("ℹ️ Default administrator credentials"):
-            st.code("Username: admin\nPassword: admin123", language="text")
-
 
 # ---------------------------------------------------------------------------
 # Tab 1 — New Entry
