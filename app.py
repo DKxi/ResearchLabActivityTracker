@@ -25,7 +25,6 @@ session helpers go through the `auth` module. This file is the UI layer only.
 """
 
 import math
-import uuid
 from datetime import datetime, date, time, timedelta
 
 import pandas as pd
@@ -116,58 +115,6 @@ def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
-def show_success_toast(message: str, duration_seconds: float = 5.0, fade_seconds: float = 1.0):
-    """
-    Render a transient "Saved!" style popup in the corner of the screen that
-    stays fully visible for `duration_seconds`, then smoothly fades out over
-    `fade_seconds`, instead of a permanent st.success() banner.
-
-    Implementation notes:
-    - Streamlit has no built-in "toast with a custom duration", so this is a
-      small hand-rolled HTML/CSS notification injected via st.markdown.
-    - A fresh, random element id is generated on every call. This matters:
-      if the same id/markup were reused across reruns, the browser can treat
-      it as "the same element" and skip replaying the CSS animation. A new
-      id guarantees the fade always restarts cleanly.
-    - This only works if the page *doesn't* immediately rerun again right
-      after this is drawn (a rerun would erase it before the timer finishes).
-      That's why the Save Entry flow below defers its rerun until the
-      *next* user interaction rather than calling st.rerun() itself.
-    """
-    toast_id = f"toast_{uuid.uuid4().hex}"
-    total = duration_seconds + fade_seconds
-    visible_pct = (duration_seconds / total) * 100
-    st.markdown(
-        f"""
-        <style>
-        @keyframes fadeout_{toast_id} {{
-            0%   {{ opacity: 1; }}
-            {visible_pct:.1f}% {{ opacity: 1; }}
-            100% {{ opacity: 0; }}
-        }}
-        #{toast_id} {{
-            position: fixed;
-            top: 80px;
-            right: 28px;
-            z-index: 9999;
-            background-color: #16a34a;
-            color: #ffffff;
-            padding: 14px 22px;
-            border-radius: 10px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.25);
-            font-size: 0.95rem;
-            font-weight: 500;
-            opacity: 1;
-            animation: fadeout_{toast_id} {total}s ease forwards;
-            pointer-events: none;
-        }}
-        </style>
-        <div id="{toast_id}">✅ {message}</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def paginate_dataframe(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     """
     Render page-size / page-number controls and return the DataFrame slice
@@ -207,14 +154,6 @@ def render_login_page():
     )
     st.markdown("<h4 style='text-align:center; color: gray;'>Please sign in to continue</h4>", unsafe_allow_html=True)
 
-    # If we just got redirected here after a successful sign-up, show that
-    # confirmation exactly once. (Same "flag in session_state, pop and
-    # display" pattern used for the Save Entry toast -- this message is
-    # shown via a normal st.success(), which is fine here since nothing
-    # forces another rerun right after it, so the user has time to read it.)
-    if st.session_state.get("_signup_pending_message"):
-        st.success(st.session_state.pop("_signup_pending_message"))
-
     _, center_col, _ = st.columns([1, 1.2, 1])
     with center_col:
         with st.form("login_form", clear_on_submit=False):
@@ -234,85 +173,12 @@ def render_login_page():
 
                 if result == "disabled":
                     st.error("🚫 This account has been disabled. Please contact an administrator.")
-                elif result == "pending":
-                    st.warning(
-                        "⏳ Your account request is still awaiting admin approval. "
-                        "Please check back later or contact an administrator."
-                    )
                 elif result is None:
                     st.error("❌ Invalid username or password.")
                 else:
                     auth.log_user_in(st, result)
                     st.success(f"✅ Welcome back, {result['full_name'] or result['username']}!")
                     st.rerun()
-
-        st.divider()
-        st.markdown("<p style='text-align:center; color: gray;'>Don't have an account yet?</p>", unsafe_allow_html=True)
-        if st.button("📝 Create an Account", use_container_width=True):
-            st.session_state["show_signup"] = True
-            st.rerun()
-
-
-def render_signup_page():
-    """
-    Self-service account creation page. Anyone can submit a request here,
-    but for security:
-      - This path can ONLY ever create role='user' accounts -- granting
-        admin rights still requires an existing admin to do it from the
-        User Management tab.
-      - New accounts are created with is_approved=False, meaning they
-        cannot log in until an admin approves them from the new
-        "Pending Approvals" panel in User Management.
-    """
-    st.markdown(
-        "<h1 style='text-align:center;'>🔬 Research Lab Activity Tracker</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("<h4 style='text-align:center; color: gray;'>Create a new account</h4>", unsafe_allow_html=True)
-    st.caption("Your request will need to be approved by an administrator before you can log in.")
-
-    _, center_col, _ = st.columns([1, 1.2, 1])
-    with center_col:
-        with st.form("signup_form", clear_on_submit=False):
-            full_name = st.text_input("Full Name", key="signup_full_name")
-            new_username = st.text_input("Choose a Username", key="signup_username")
-            new_password = st.text_input("Choose a Password", type="password", key="signup_password")
-            confirm_password = st.text_input("Confirm Password", type="password", key="signup_confirm")
-            submitted = st.form_submit_button("✅ Submit Account Request", use_container_width=True, type="primary")
-
-        if submitted:
-            if not new_username.strip() or not new_password:
-                st.error("⚠️ Username and password are required.")
-            elif len(new_password) < 4:
-                st.error("⚠️ Password must be at least 4 characters long.")
-            elif new_password != confirm_password:
-                st.error("⚠️ Passwords do not match.")
-            else:
-                try:
-                    success, msg = db.create_user(
-                        new_username.strip(), new_password, "user", full_name.strip(),
-                        is_approved=False,
-                    )
-                except Exception as exc:
-                    success, msg = False, f"Unexpected error creating account: {exc}"
-
-                if success:
-                    # Do NOT log the user in -- the account is pending until
-                    # an admin approves it. Send them back to the login page
-                    # with a one-time confirmation message instead.
-                    st.session_state["show_signup"] = False
-                    st.session_state["_signup_pending_message"] = (
-                        f"✅ Account request submitted for '{new_username.strip()}'. "
-                        "An administrator must approve it before you can log in."
-                    )
-                    st.rerun()
-                else:
-                    st.error(f"❌ {msg}")
-
-        st.divider()
-        if st.button("← Back to Login", use_container_width=True):
-            st.session_state["show_signup"] = False
-            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -326,92 +192,15 @@ NEW_ENTRY_KEYS = [
 
 
 def clear_new_entry_form():
-    """
-    on_click callback for the 'Clear Form' button.
-
-    IMPORTANT: this must run as an on_click callback, not as a plain
-    `if button_clicked:` check inside the function body. Streamlit raises
-    a StreamlitAPIException if you try to delete/modify
-    st.session_state[key] for a key whose widget has *already* been drawn
-    earlier in the same script run -- which is exactly what was happening
-    before (the widgets were created above, then this ran afterwards in
-    the same run). on_click callbacks execute *before* the rest of the
-    script (and its widgets) are redrawn, so the deletion is safe here and
-    the widgets correctly reset to their defaults on the next render.
-    """
+    """Remove the New Entry widget keys from session_state to reset the form."""
     for key in NEW_ENTRY_KEYS:
         if key in st.session_state:
             del st.session_state[key]
 
 
-def _save_new_entry_callback():
-    """
-    on_click callback for the 'Save Entry' button. Reads the submitted
-    values directly out of session_state (Streamlit syncs widget values
-    into session_state before running callbacks), validates them, saves to
-    the database, and -- on success -- clears the form via
-    clear_new_entry_form(). Doing all of this in a callback (instead of in
-    the main render function) is what makes the form-clearing safe; see
-    the note on clear_new_entry_form() above.
-
-    Results are stashed in session_state flags ("_ne_toast" / "_ne_errors")
-    so the main render function can display them once the script resumes.
-    """
-    professor_name = st.session_state.get("ne_professor_name", "")
-    lab_name = st.session_state.get("ne_lab_name", "")
-    project_name = st.session_state.get("ne_project_name", "")
-    lab_activity = st.session_state.get("ne_lab_activity", "")
-    entry_time = st.session_state.get("ne_entry_time", time(9, 0))
-    exit_time = st.session_state.get("ne_exit_time", time(17, 0))
-    entry_date = st.session_state.get("ne_entry_date", date.today())
-    lab_partner_name = st.session_state.get("ne_partner_name", "")
-    lab_partner_contribution = st.session_state.get("ne_partner_contribution", "")
-    notes = st.session_state.get("ne_notes", "")
-
-    errors = validate_entry_form(
-        professor_name, lab_name, project_name, lab_activity, entry_time, exit_time
-    )
-    if errors:
-        st.session_state["_ne_errors"] = errors
-        return
-
-    computed_hours = calculate_hours(entry_time, exit_time)
-    data = {
-        "entry_date": entry_date.strftime("%Y-%m-%d"),
-        "user_name": st.session_state.username,
-        "professor_name": professor_name.strip(),
-        "lab_name": lab_name.strip(),
-        "project_name": project_name.strip(),
-        "entry_time": entry_time.strftime("%H:%M"),
-        "exit_time": exit_time.strftime("%H:%M"),
-        "total_hours": round(computed_hours, 2),
-        "lab_activity": lab_activity.strip(),
-        "lab_partner_name": lab_partner_name.strip() if lab_partner_name else "",
-        "lab_partner_contribution": lab_partner_contribution.strip() if lab_partner_contribution else "",
-        "notes": notes.strip() if notes else "",
-    }
-    success, result = db.add_entry(data)
-    if success:
-        st.session_state["_ne_toast"] = f"Entry #{result} saved successfully!"
-        clear_new_entry_form()
-    else:
-        st.session_state["_ne_errors"] = [f"Could not save entry: {result}"]
-
-
 def render_new_entry_tab():
     st.subheader("📝 Log a New Lab Visit")
     st.caption("Fields marked with * are required.")
-
-    # Surface whatever the Save callback (above) decided last time, then
-    # immediately clear the flag so it only ever shows once. Crucially,
-    # we do NOT call st.rerun() anywhere in this flow -- the page just sits
-    # here normally rendered, which is what lets the 5-second toast
-    # animation actually finish playing instead of being wiped out instantly.
-    if st.session_state.get("_ne_toast"):
-        show_success_toast(st.session_state.pop("_ne_toast"))
-    if st.session_state.get("_ne_errors"):
-        for err in st.session_state.pop("_ne_errors"):
-            st.error(f"⚠️ {err}")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -443,14 +232,42 @@ def render_new_entry_tab():
     notes = st.text_area("Additional Notes", key="ne_notes", height=90)
 
     col_save, col_clear = st.columns(2)
-    col_save.button(
-        "💾 Save Entry", type="primary", use_container_width=True,
-        on_click=_save_new_entry_callback,
-    )
-    col_clear.button(
-        "🔄 Clear Form", use_container_width=True,
-        on_click=clear_new_entry_form,
-    )
+    save_clicked = col_save.button("💾 Save Entry", type="primary", use_container_width=True)
+    clear_clicked = col_clear.button("🔄 Clear Form", use_container_width=True)
+
+    if clear_clicked:
+        clear_new_entry_form()
+        st.rerun()
+
+    if save_clicked:
+        errors = validate_entry_form(
+            professor_name, lab_name, project_name, lab_activity, entry_time, exit_time
+        )
+        if errors:
+            for err in errors:
+                st.error(f"⚠️ {err}")
+        else:
+            data = {
+                "entry_date": entry_date.strftime("%Y-%m-%d"),
+                "user_name": st.session_state.username,
+                "professor_name": professor_name.strip(),
+                "lab_name": lab_name.strip(),
+                "project_name": project_name.strip(),
+                "entry_time": entry_time.strftime("%H:%M"),
+                "exit_time": exit_time.strftime("%H:%M"),
+                "total_hours": round(computed_hours, 2),
+                "lab_activity": lab_activity.strip(),
+                "lab_partner_name": lab_partner_name.strip() if lab_partner_name else "",
+                "lab_partner_contribution": lab_partner_contribution.strip() if lab_partner_contribution else "",
+                "notes": notes.strip() if notes else "",
+            }
+            success, result = db.add_entry(data)
+            if success:
+                st.success(f"✅ Entry #{result} saved successfully!")
+                clear_new_entry_form()
+                st.rerun()
+            else:
+                st.error(f"❌ Could not save entry: {result}")
 
 
 # ---------------------------------------------------------------------------
@@ -793,47 +610,10 @@ def render_partner_tab():
 # ---------------------------------------------------------------------------
 def render_user_management_tab():
     st.subheader("👥 User Management")
-
-    try:
-        pending_count = len(db.get_pending_users())
-    except Exception:
-        pending_count = 0
-    pending_label = f"⏳ Pending Approvals ({pending_count})" if pending_count else "⏳ Pending Approvals"
-
-    sub_tabs = st.tabs([pending_label, "➕ Add User", "⚙️ Manage Users", "📈 User Activity Statistics"])
-
-    # ---- Pending Approvals ---------------------------------------------------
-    with sub_tabs[0]:
-        st.caption("Accounts created via the public 'Create an Account' page land here "
-                   "and cannot log in until you approve them.")
-        try:
-            pending_df = db.get_pending_users()
-        except Exception as exc:
-            st.error(f"❌ Could not load pending account requests: {exc}")
-            pending_df = pd.DataFrame()
-
-        if pending_df.empty:
-            st.info("No pending account requests right now.")
-        else:
-            for _, row in pending_df.iterrows():
-                pending_id = int(row["user_id"])
-                with st.container(border=True):
-                    info_col, approve_col, reject_col = st.columns([3, 1, 1])
-                    info_col.markdown(
-                        f"**{row['full_name'] or row['username']}**  \n"
-                        f"@{row['username']} &nbsp;·&nbsp; requested {row['created_date']}"
-                    )
-                    if approve_col.button("✅ Approve", key=f"approve_{pending_id}", use_container_width=True):
-                        success, msg = db.approve_user(pending_id)
-                        st.success(msg) if success else st.error(msg)
-                        st.rerun()
-                    if reject_col.button("🗑️ Reject", key=f"reject_{pending_id}", use_container_width=True):
-                        success, msg = db.reject_pending_user(pending_id)
-                        st.success(msg) if success else st.error(msg)
-                        st.rerun()
+    sub_tabs = st.tabs(["➕ Add User", "⚙️ Manage Users", "📈 User Activity Statistics"])
 
     # ---- Add User -----------------------------------------------------------
-    with sub_tabs[1]:
+    with sub_tabs[0]:
         with st.form("add_user_form", clear_on_submit=True):
             new_username = st.text_input("Username")
             new_full_name = st.text_input("Full Name")
@@ -845,8 +625,6 @@ def render_user_management_tab():
             if not new_username.strip() or not new_password:
                 st.error("⚠️ Username and password are required.")
             else:
-                # is_approved defaults to True here -- accounts added directly
-                # by an admin are usable immediately, unlike public sign-ups.
                 success, msg = db.create_user(new_username, new_password, new_role, new_full_name)
                 if success:
                     st.success(f"✅ {msg}")
@@ -854,7 +632,7 @@ def render_user_management_tab():
                     st.error(f"❌ {msg}")
 
     # ---- Manage Users (edit / disable / reset password) ---------------------
-    with sub_tabs[2]:
+    with sub_tabs[1]:
         try:
             users_df = db.get_all_users_df()
         except Exception as exc:
@@ -892,23 +670,18 @@ def render_user_management_tab():
                 else:
                     st.error(f"❌ {msg}")
 
-        # Account status: approve (if pending) / disable / enable
+        # Enable / disable account
         with col_status:
-            st.markdown("**🚦 Account Status**")
+            st.markdown("**🚫 Account Status**")
+            currently_active = user_row["status"] == "Active"
             if is_self:
                 st.info("You cannot disable your own account.")
-            elif user_row["status"] == "Pending Approval":
-                st.caption("This account is still awaiting approval.")
-                if st.button("✅ Approve User", key=f"um_approve_{user_id}"):
-                    success, msg = db.approve_user(user_id)
-                    st.success(msg) if success else st.error(msg)
-                    st.rerun()
-            elif user_row["status"] == "Active":
+            elif currently_active:
                 if st.button("🚫 Disable User", key=f"um_disable_{user_id}"):
                     success, msg = db.set_user_active(user_id, False)
                     st.success(msg) if success else st.error(msg)
                     st.rerun()
-            else:  # Disabled
+            else:
                 if st.button("✅ Enable User", key=f"um_enable_{user_id}"):
                     success, msg = db.set_user_active(user_id, True)
                     st.success(msg) if success else st.error(msg)
@@ -926,7 +699,7 @@ def render_user_management_tab():
                     st.success(msg) if success else st.error(msg)
 
     # ---- User Activity Statistics -------------------------------------------
-    with sub_tabs[3]:
+    with sub_tabs[2]:
         try:
             entries_df = db.get_entries()
         except Exception as exc:
@@ -956,16 +729,6 @@ def render_main_app():
     with st.sidebar:
         st.markdown(f"### 👋 Welcome, {st.session_state.full_name or st.session_state.username}")
         st.caption(f"Role: **{st.session_state.role.upper()}**")
-
-        if auth.is_admin(st):
-            try:
-                pending_count = len(db.get_pending_users())
-            except Exception:
-                pending_count = 0
-            if pending_count:
-                st.warning(f"🔔 {pending_count} account request(s) awaiting your approval "
-                           "(see the User Management tab).")
-
         st.divider()
         if st.button("🚪 Logout", use_container_width=True):
             auth.log_user_out(st)
@@ -1010,8 +773,6 @@ def render_main_app():
 def main():
     if st.session_state.logged_in:
         render_main_app()
-    elif st.session_state.get("show_signup"):
-        render_signup_page()
     else:
         render_login_page()
 
