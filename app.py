@@ -341,6 +341,16 @@ def clear_new_entry_form():
     """
     for key in NEW_ENTRY_KEYS:
         if key in st.session_state:
+            st.session_state["ne_professor_name"] = ""
+            st.session_state["ne_lab_name"] = ""
+            st.session_state["ne_project_name"] = ""
+            st.session_state["ne_entry_time"] = st.session_state.get("ne_entry_time", time(9, 0))
+            st.session_state["ne_exit_time"] = st.session_state.get("ne_exit_time", time(17, 0))
+            st.session_state["ne_lab_activity"] = ""
+            st.session_state["ne_partner_name"] = ""
+            st.session_state["ne_partner_contribution"] = ""
+            st.session_state["ne_notes"] = ""
+            st.session_state["ne_entry_date"] = st.session_state.get("ne_entry_date", date.today())
             del st.session_state[key]
 
 

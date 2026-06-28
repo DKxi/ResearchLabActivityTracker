@@ -96,10 +96,20 @@ def init_database() -> None:
                 role           TEXT NOT NULL CHECK (role IN ('admin', 'user')),
                 full_name      TEXT,
                 is_active      INTEGER NOT NULL DEFAULT 1,
+                is_approved    INTEGER NOT NULL DEFAULT 1,
                 created_date   TEXT NOT NULL
             )
             """
         )
+
+        # --- Migration for databases created before the approval feature
+        # existed: SQLite has no "ADD COLUMN IF NOT EXISTS", so check first.
+        # New accounts created before this column existed are treated as
+        # already-approved (default 1), so nobody who could already log in
+        # is suddenly locked out by this upgrade.
+        existing_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+        if "is_approved" not in existing_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN is_approved INTEGER NOT NULL DEFAULT 1")
 
         # --- Lab_Entries table -------------------------------------------
         cursor.execute(
@@ -171,7 +181,11 @@ def get_all_users_df() -> pd.DataFrame:
         df = pd.read_sql_query(
             """
             SELECT user_id, username, full_name, role,
-                   CASE is_active WHEN 1 THEN 'Active' ELSE 'Disabled' END AS status,
+                   CASE
+                       WHEN is_approved = 0 THEN 'Pending Approval'
+                       WHEN is_active = 0 THEN 'Disabled'
+                       ELSE 'Active'
+                   END AS status,
                    created_date
             FROM users
             ORDER BY user_id ASC
@@ -181,10 +195,31 @@ def get_all_users_df() -> pd.DataFrame:
     return df
 
 
-def create_user(username: str, password: str, role: str, full_name: str = ""):
+def get_pending_users() -> pd.DataFrame:
+    """Return self-registered accounts that are still awaiting admin approval."""
+    with get_connection() as conn:
+        df = pd.read_sql_query(
+            """
+            SELECT user_id, username, full_name, created_date
+            FROM users
+            WHERE is_approved = 0
+            ORDER BY created_date ASC
+            """,
+            conn,
+        )
+    return df
+
+
+def create_user(username: str, password: str, role: str, full_name: str = "", is_approved: bool = True):
     """
     Insert a new user. Returns (success: bool, message: str).
     Fails gracefully (instead of raising) if the username is already taken.
+
+    `is_approved` defaults to True because this function is used both by:
+      - Admins adding a user directly from User Management (should be
+        usable immediately), and
+      - The public self-registration page (which passes is_approved=False
+        so the account exists but cannot log in until an admin approves it).
     """
     username = (username or "").strip()
     if not username or not password:
@@ -196,16 +231,47 @@ def create_user(username: str, password: str, role: str, full_name: str = ""):
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO users (username, password_hash, role, full_name, is_active, created_date)
-                VALUES (?, ?, ?, ?, 1, ?)
+                INSERT INTO users (username, password_hash, role, full_name, is_active, is_approved, created_date)
+                VALUES (?, ?, ?, ?, 1, ?, ?)
                 """,
-                (username, auth.hash_password(password), role, full_name.strip(), now_str()),
+                (
+                    username, auth.hash_password(password), role, full_name.strip(),
+                    1 if is_approved else 0, now_str(),
+                ),
             )
         return True, f"User '{username}' created successfully."
     except sqlite3.IntegrityError:
         return False, f"Username '{username}' already exists. Please choose another."
     except Exception as exc:  # pragma: no cover - defensive catch-all
         return False, f"Unexpected database error while creating user: {exc}"
+
+
+def approve_user(user_id: int):
+    """Approve a pending self-registered account so it can log in."""
+    try:
+        with get_connection() as conn:
+            conn.execute("UPDATE users SET is_approved = 1 WHERE user_id = ?", (user_id,))
+        return True, "Account approved -- the user can now log in."
+    except Exception as exc:
+        return False, f"Unexpected database error while approving user: {exc}"
+
+
+def reject_pending_user(user_id: int):
+    """
+    Permanently remove a pending account request. The WHERE clause is
+    scoped to is_approved = 0 on purpose, so this can never accidentally
+    delete an already-active account, even if called with the wrong id.
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM users WHERE user_id = ? AND is_approved = 0", (user_id,)
+            )
+            if cursor.rowcount == 0:
+                return False, "That account is not a pending request (it may already be approved)."
+        return True, "Account request rejected and removed."
+    except Exception as exc:
+        return False, f"Unexpected database error while rejecting user: {exc}"
 
 
 def update_user(user_id: int, full_name: str = None, role: str = None):
@@ -259,16 +325,19 @@ def verify_login(username: str, password: str):
     Returns one of:
       - dict(user row)  -> login successful
       - "disabled"      -> account exists but has been disabled by an admin
+      - "pending"       -> self-registered account awaiting admin approval
       - None            -> username not found or password incorrect
     """
     user = get_user_by_username((username or "").strip())
     if user is None:
         return None
+    if not auth.verify_password(password, user["password_hash"]):
+        return None
     if not user["is_active"]:
         return "disabled"
-    if auth.verify_password(password, user["password_hash"]):
-        return user
-    return None
+    if not user.get("is_approved", 1):
+        return "pending"
+    return user
 
 
 # ---------------------------------------------------------------------------
