@@ -188,7 +188,6 @@ def paginate_dataframe(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     end = start + page_size
     return df.iloc[start:end]
 
-
 ENTRY_DISPLAY_COLUMNS = [
     "entry_id", "entry_date", "user_name", "professor_name", "lab_name",
     "project_name", "entry_time", "exit_time", "total_hours",
@@ -468,6 +467,19 @@ def render_new_entry_tab():
 # ---------------------------------------------------------------------------
 def render_entry_details_and_actions(entry: dict):
     """Show full details for one entry plus View/Edit/Delete controls."""
+    print("see1111=====================", entry['user_name'])
+    print("see2222=====================",st.session_state.get("user_id"))
+    #print("see3333=====================", entry['user_id'])
+    my_user = db.get_user_by_username(entry['user_name'])
+
+    print("see3333=====================", my_user['user_id'])
+
+
+    if auth.is_user(st, my_user['user_id']) is False and auth.is_admin(st) is False:
+        st.warning("⚠️ You can only view your own entries. Please contact an administrator if you believe this is an error.")
+        return
+    
+
     st.markdown(f"#### Entry #{entry['entry_id']} — {entry['lab_name']} ({entry['entry_date']})")
 
     detail_cols = st.columns(3)
@@ -580,11 +592,21 @@ def render_history_tab():
         )
         f_date_to = c6.date_input("To", value=date.today(), key="hist_date_to", disabled=not use_date_filter)
 
+    my_user = db.get_user_by_id( st.session_state.get("user_id"))
+
+    print("see=======================", my_user['username'])
+    print("see=======================", st.session_state.get("user_id"))
+    print("see=======================", my_user)
+    
     filters = {
         "professor_name": f_professor.strip() if f_professor else "",
         "lab_name": f_lab.strip() if f_lab else "",
         "project_name": f_project.strip() if f_project else "",
+        "user_name": my_user['username'] if my_user else None,
+        "role": my_user['role'] if my_user else None,
     }
+
+
     if use_date_filter:
         filters["date_from"] = f_date_from.strftime("%Y-%m-%d")
         filters["date_to"] = f_date_to.strftime("%Y-%m-%d")

@@ -434,6 +434,9 @@ def get_entries(filters: dict = None) -> pd.DataFrame:
     params = []
 
     if filters:
+        if filters.get("role") == "user" and filters.get("user_name"):
+            query += " AND user_name LIKE ?"
+            params.append(f"%{filters['user_name']}%")
         if filters.get("professor_name"):
             query += " AND professor_name LIKE ?"
             params.append(f"%{filters['professor_name']}%")
@@ -451,6 +454,9 @@ def get_entries(filters: dict = None) -> pd.DataFrame:
             params.append(filters["date_to"])
 
     query += " ORDER BY entry_date DESC, entry_id DESC"
+
+    print("Executing SQL query:", query)
+    print("With parameters:", params)
 
     with get_connection() as conn:
         df = pd.read_sql_query(query, conn, params=params)

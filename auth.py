@@ -18,6 +18,8 @@ Why bcrypt?
     purpose-built option for password storage.
 """
 
+from turtle import st
+
 import bcrypt
 
 
@@ -113,3 +115,10 @@ def log_user_out(st) -> None:
 def is_admin(st) -> bool:
     """Convenience check used throughout app.py to gate admin-only UI."""
     return st.session_state.get("role") == "admin"
+
+
+def is_user(st, userid) -> bool:
+    """Convenience check used throughout app.py to gate user-only UI."""
+    return st.session_state.get("role") == "user" and st.session_state.get("logged_in") is True and st.session_state.get("user_id") == userid
+    
+    
