@@ -18,7 +18,7 @@ Why bcrypt?
     purpose-built option for password storage.
 """
 
-from turtle import st
+#from turtle import st
 
 import bcrypt
 
